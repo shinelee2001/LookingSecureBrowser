@@ -1,0 +1,67 @@
+QMainWindow {
+    background-color: #050805;
+}
+
+QWidget {
+    background-color: #050805;
+    color: #d8ffe8;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+}
+
+QLineEdit {
+    background-color: #0b120d;
+    color: #00ff88;
+    border: 1px solid #00aa55;
+    padding: 8px;
+    selection-background-color: #00ff88;
+    selection-color: #000000;
+}
+
+QPushButton {
+    background-color: #0b120d;
+    color: #00ff88;
+    border: 1px solid #00aa55;
+    padding: 8px 12px;
+}
+
+QPushButton:hover {
+    background-color: #102018;
+    border: 1px solid #00ff88;
+}
+
+QTextEdit {
+    background-color: #020402;
+    color: #00ff88;
+    border: 1px solid #00aa55;
+    padding: 10px;
+}
+
+QLabel {
+    color: #d8ffe8;
+}
+
+#SecurityPanel {
+    background-color: #080f0a;
+    border-left: 1px solid #00aa55;
+}
+
+#PanelTitle {
+    color: #00ff88;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 8px;
+    border-bottom: 1px solid #00aa55;
+}
+
+#ScoreLabel {
+    color: #00ff88;
+    font-size: 15px;
+    font-weight: bold;
+}
+
+#GradeLabel {
+    color: #ffcc00;
+    font-size: 15px;
+    font-weight: bold;
+}
