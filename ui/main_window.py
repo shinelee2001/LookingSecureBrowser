@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
 )
+from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from core.header_analyzer import analyze_headers
@@ -36,6 +37,10 @@ class MainWindow(QMainWindow):
 
         self.score_label = QLabel("Score: N/A")
         self.grade_label = QLabel("Grade: N/A")
+        self.blocked_label = QLabel("Blocked: 0")
+        self.allowed_label = QLabel("Allowed: 0")
+        self.blocked_count = 0
+        self.allowed_count = 0
 
         # Network tab style request table
         self.network_table = QTableWidget()
@@ -71,6 +76,7 @@ class MainWindow(QMainWindow):
         self.reload_btn = QPushButton("⟳")
         self.go_btn = QPushButton("GO")
         self.scan_btn = QPushButton("SCAN")
+        self.blocking_btn = QPushButton("BLOCKING ON")
         self.console_btn = QPushButton("CONSOLE")
         self.dock_bottom_btn = QPushButton("BOTTOM")
         self.dock_right_btn = QPushButton("RIGHT")
@@ -83,6 +89,7 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.url_bar)
         nav_bar.addWidget(self.go_btn)
         nav_bar.addWidget(self.scan_btn)
+        nav_bar.addWidget(self.blocking_btn)
         nav_bar.addWidget(self.console_btn)
         nav_bar.addWidget(self.dock_bottom_btn)
         nav_bar.addWidget(self.dock_right_btn)
@@ -125,9 +132,13 @@ class MainWindow(QMainWindow):
     
         self.score_label.setObjectName("ScoreLabel")
         self.grade_label.setObjectName("GradeLabel")
+        self.blocked_label.setObjectName("BlockedLabel")
+        self.allowed_label.setObjectName("AllowedLabel")
     
         title_row.addWidget(title)
         title_row.addStretch()
+        title_row.addWidget(self.allowed_label)
+        title_row.addWidget(self.blocked_label)
         title_row.addWidget(self.score_label)
         title_row.addWidget(self.grade_label)
     
@@ -157,9 +168,9 @@ class MainWindow(QMainWindow):
         network_title = QLabel("NETWORK TRAFFIC")
         network_title.setObjectName("SubPanelTitle")
     
-        self.network_table.setColumnCount(4)
+        self.network_table.setColumnCount(6)
         self.network_table.setHorizontalHeaderLabels(
-            ["Time", "Method", "Type", "URL"]
+            ["Time", "Action", "Method", "Type", "Reason", "URL"]
         )
     
         self.network_table.horizontalHeader().setSectionResizeMode(
@@ -172,7 +183,13 @@ class MainWindow(QMainWindow):
             2, QHeaderView.ResizeToContents
         )
         self.network_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.Stretch
+            3, QHeaderView.ResizeToContents
+        )
+        self.network_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeToContents
+        )
+        self.network_table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.Stretch
         )
     
         self.network_table.verticalHeader().setVisible(False)
@@ -208,6 +225,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.go_btn.clicked.connect(self.go_to_url)
         self.scan_btn.clicked.connect(self.scan_current_url)
+        self.blocking_btn.clicked.connect(self.toggle_request_blocking)
         self.console_btn.clicked.connect(self.toggle_console)
 
         self.dock_bottom_btn.clicked.connect(self.move_console_bottom)
@@ -242,6 +260,7 @@ class MainWindow(QMainWindow):
         self.url_bar.setText(normalized)
 
     def go_to_url(self):
+        self.reset_network_stats()
         self.load_url(self.url_bar.text())
 
     def update_url_bar(self, qurl: QUrl):
@@ -254,6 +273,21 @@ class MainWindow(QMainWindow):
             self.scan_current_url(show_console=False)
         else:
             self.security_output.setPlainText("[ERROR] Page failed to load.")
+
+    def toggle_request_blocking(self):
+        enabled = not self.network_interceptor.blocking_enabled
+        self.network_interceptor.set_blocking_enabled(enabled)
+        self.blocking_btn.setText("BLOCKING ON" if enabled else "BLOCKING OFF")
+
+    def reset_network_stats(self):
+        self.blocked_count = 0
+        self.allowed_count = 0
+        self.network_table.setRowCount(0)
+        self.update_network_stats()
+
+    def update_network_stats(self):
+        self.blocked_label.setText(f"Blocked: {self.blocked_count}")
+        self.allowed_label.setText(f"Allowed: {self.allowed_count}")
 
     def toggle_console(self):
         if self.security_dock.isVisible():
@@ -342,15 +376,35 @@ class MainWindow(QMainWindow):
             self.security_dock.show()
             self.security_dock.raise_()
             
-    def add_network_row(self, method: str, url: str, resource_type: str):
+    def add_network_row(
+        self,
+        method: str,
+        url: str,
+        resource_type: str,
+        action: str,
+        reason: str,
+    ):
+        if action == "BLOCKED":
+            self.blocked_count += 1
+        else:
+            self.allowed_count += 1
+
+        self.update_network_stats()
+
         row = self.network_table.rowCount()
         self.network_table.insertRow(row)
     
         now = QDateTime.currentDateTime().toString("HH:mm:ss.zzz")
-    
-        self.network_table.setItem(row, 0, QTableWidgetItem(now))
-        self.network_table.setItem(row, 1, QTableWidgetItem(method))
-        self.network_table.setItem(row, 2, QTableWidgetItem(resource_type))
-        self.network_table.setItem(row, 3, QTableWidgetItem(url))
+
+        values = [now, action, method, resource_type, reason, url]
+        color = QColor("#ff6666") if action == "BLOCKED" else QColor("#00ff88")
+
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+
+            if column == 1:
+                item.setForeground(QBrush(color))
+
+            self.network_table.setItem(row, column, item)
     
         self.network_table.scrollToBottom()

@@ -65,3 +65,15 @@ QLabel {
     font-size: 15px;
     font-weight: bold;
 }
+
+#BlockedLabel {
+    color: #ff6666;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+#AllowedLabel {
+    color: #00ff88;
+    font-size: 14px;
+    font-weight: bold;
+}
