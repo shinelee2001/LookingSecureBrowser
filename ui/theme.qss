@@ -37,6 +37,23 @@ QTextEdit {
     padding: 10px;
 }
 
+QTableWidget {
+    background-color: #020402;
+    color: #d8ffe8;
+    border: 1px solid #00aa55;
+    selection-background-color: #123b25;
+    selection-color: #ffffff;
+}
+
+QHeaderView::section {
+    background-color: #0b120d;
+    color: #00ff88;
+    border: 0;
+    border-bottom: 1px solid #00aa55;
+    padding: 6px 8px;
+    font-weight: bold;
+}
+
 QLabel {
     color: #d8ffe8;
 }
@@ -46,34 +63,53 @@ QLabel {
     border-left: 1px solid #00aa55;
 }
 
+#SecuritySummaryBar {
+    background-color: #020402;
+    border-bottom: 1px solid #00aa55;
+}
+
 #PanelTitle {
     color: #00ff88;
-    font-size: 18px;
+    font-size: 14px;
     font-weight: bold;
-    padding: 8px;
-    border-bottom: 1px solid #00aa55;
+    padding: 0;
+}
+
+#SubPanelTitle {
+    color: #d8ffe8;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 4px 2px;
+}
+
+#NetworkPanel {
+    background-color: #080f0a;
+}
+
+#FindingsPanel {
+    background-color: #080f0a;
 }
 
 #ScoreLabel {
     color: #00ff88;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: bold;
 }
 
 #GradeLabel {
     color: #ffcc00;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: bold;
 }
 
 #BlockedLabel {
     color: #ff6666;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
 }
 
 #AllowedLabel {
     color: #00ff88;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
 }

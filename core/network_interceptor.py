@@ -36,14 +36,14 @@ TRACKING_QUERY_KEYS = {
 
 
 class NetworkEventBus(QObject):
-    request_seen = Signal(str, str, str, str, str)
+    request_seen = Signal(str, str, str, str, str, str)
 
 
 class NetworkInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, event_bus: NetworkEventBus):
         super().__init__()
         self.event_bus = event_bus
-        self.blocking_enabled = True
+        self.blocking_enabled = False
 
     def set_blocking_enabled(self, enabled: bool):
         self.blocking_enabled = enabled
@@ -54,6 +54,7 @@ class NetworkInterceptor(QWebEngineUrlRequestInterceptor):
         first_party_url = info.firstPartyUrl()
 
         url = request_url.toString()
+        first_party = first_party_url.toString()
         resource_type = str(info.resourceType())
         action = "ALLOWED"
         reason = ""
@@ -69,7 +70,14 @@ class NetworkInterceptor(QWebEngineUrlRequestInterceptor):
                 info.block(True)
                 action = "BLOCKED"
 
-        self.event_bus.request_seen.emit(method, url, resource_type, action, reason)
+        self.event_bus.request_seen.emit(
+            method,
+            url,
+            resource_type,
+            action,
+            reason,
+            first_party,
+        )
 
     def should_block_request(self, request_url, first_party_url, resource_type: str):
         scheme = request_url.scheme().lower()

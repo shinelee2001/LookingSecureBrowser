@@ -1,4 +1,7 @@
-from PySide6.QtCore import QUrl, Qt, QDateTime
+import json
+from threading import Thread
+
+from PySide6.QtCore import QUrl, Qt, QDateTime, QUrlQuery, Signal
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -14,15 +17,21 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QDialog,
+    QDialogButtonBox,
 )
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from core.header_analyzer import analyze_headers
 from core.network_interceptor import NetworkEventBus, NetworkInterceptor
+from core.virustotal_url_scanner import VirusTotalUrlScanner
 
 
 class MainWindow(QMainWindow):
+    link_scan_finished = Signal(list)
+    link_scan_failed = Signal(str)
+
     def __init__(self):
         super().__init__()
 
@@ -41,6 +50,8 @@ class MainWindow(QMainWindow):
         self.allowed_label = QLabel("Allowed: 0")
         self.blocked_count = 0
         self.allowed_count = 0
+        self.network_events = []
+        self.link_scanner = VirusTotalUrlScanner()
 
         # Network tab style request table
         self.network_table = QTableWidget()
@@ -76,7 +87,8 @@ class MainWindow(QMainWindow):
         self.reload_btn = QPushButton("⟳")
         self.go_btn = QPushButton("GO")
         self.scan_btn = QPushButton("SCAN")
-        self.blocking_btn = QPushButton("BLOCKING ON")
+        self.link_scan_btn = QPushButton("SCAN LINKS")
+        self.blocking_btn = QPushButton("BLOCKING OFF")
         self.console_btn = QPushButton("CONSOLE")
         self.dock_bottom_btn = QPushButton("BOTTOM")
         self.dock_right_btn = QPushButton("RIGHT")
@@ -89,6 +101,7 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.url_bar)
         nav_bar.addWidget(self.go_btn)
         nav_bar.addWidget(self.scan_btn)
+        nav_bar.addWidget(self.link_scan_btn)
         nav_bar.addWidget(self.blocking_btn)
         nav_bar.addWidget(self.console_btn)
         nav_bar.addWidget(self.dock_bottom_btn)
@@ -122,11 +135,17 @@ class MainWindow(QMainWindow):
         security_frame.setObjectName("SecurityPanel")
     
         security_layout = QVBoxLayout(security_frame)
-        security_layout.setContentsMargins(10, 10, 10, 10)
-        security_layout.setSpacing(8)
-    
-        title_row = QHBoxLayout()
-    
+        security_layout.setContentsMargins(8, 6, 8, 8)
+        security_layout.setSpacing(6)
+
+        summary_bar = QFrame()
+        summary_bar.setObjectName("SecuritySummaryBar")
+        summary_bar.setFixedHeight(30)
+
+        title_row = QHBoxLayout(summary_bar)
+        title_row.setContentsMargins(8, 0, 8, 0)
+        title_row.setSpacing(10)
+
         title = QLabel("SECURITY CONSOLE")
         title.setObjectName("PanelTitle")
     
@@ -141,26 +160,28 @@ class MainWindow(QMainWindow):
         title_row.addWidget(self.blocked_label)
         title_row.addWidget(self.score_label)
         title_row.addWidget(self.grade_label)
+
+        security_layout.addWidget(summary_bar)
     
-        security_layout.addLayout(title_row)
+        # Console body: network first, header scan second.
+        self.console_splitter = QSplitter(Qt.Horizontal)
     
-        # Console 내부를 좌우로 나누기
-        console_splitter = QSplitter(Qt.Horizontal)
-    
-        # 왼쪽: 보안 분석 결과
+        # Header scan summary
         findings_frame = QFrame()
+        findings_frame.setObjectName("FindingsPanel")
         findings_layout = QVBoxLayout(findings_frame)
         findings_layout.setContentsMargins(0, 0, 0, 0)
         findings_layout.setSpacing(6)
     
-        findings_title = QLabel("FINDINGS")
+        findings_title = QLabel("HEADER SCAN")
         findings_title.setObjectName("SubPanelTitle")
     
         findings_layout.addWidget(findings_title)
         findings_layout.addWidget(self.security_output)
     
-        # 오른쪽: Network Traffic
+        # Network traffic table
         network_frame = QFrame()
+        network_frame.setObjectName("NetworkPanel")
         network_layout = QVBoxLayout(network_frame)
         network_layout.setContentsMargins(0, 0, 0, 0)
         network_layout.setSpacing(6)
@@ -196,17 +217,20 @@ class MainWindow(QMainWindow):
         self.network_table.setShowGrid(False)
         self.network_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.network_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.network_table.setToolTip("Double-click a request to inspect details.")
     
         network_layout.addWidget(network_title)
         network_layout.addWidget(self.network_table)
     
-        console_splitter.addWidget(findings_frame)
-        console_splitter.addWidget(network_frame)
+        self.console_splitter.addWidget(network_frame)
+        self.console_splitter.addWidget(findings_frame)
     
-        # 기본 반반
-        console_splitter.setSizes([600, 600])
+        # Give network traffic most of the console area.
+        self.console_splitter.setStretchFactor(0, 4)
+        self.console_splitter.setStretchFactor(1, 1)
+        self.console_splitter.setSizes([980, 260])
     
-        security_layout.addWidget(console_splitter)
+        security_layout.addWidget(self.console_splitter, 1)
     
         self.security_dock.setWidget(security_frame)
     
@@ -215,7 +239,7 @@ class MainWindow(QMainWindow):
     
         self.resizeDocks(
             [self.security_dock],
-            [320],
+            [360],
             Qt.Vertical,
         )
     
@@ -225,6 +249,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.go_btn.clicked.connect(self.go_to_url)
         self.scan_btn.clicked.connect(self.scan_current_url)
+        self.link_scan_btn.clicked.connect(self.scan_page_links)
         self.blocking_btn.clicked.connect(self.toggle_request_blocking)
         self.console_btn.clicked.connect(self.toggle_console)
 
@@ -238,10 +263,14 @@ class MainWindow(QMainWindow):
         self.reload_btn.clicked.connect(self.browser.reload)
 
         self.browser.urlChanged.connect(self.update_url_bar)
+        self.browser.loadStarted.connect(self.on_load_started)
         self.browser.loadFinished.connect(self.on_load_finished)
 
         self.security_dock.visibilityChanged.connect(self.on_console_visibility_changed)
         self.network_event_bus.request_seen.connect(self.add_network_row)
+        self.network_table.cellDoubleClicked.connect(self.show_network_detail)
+        self.link_scan_finished.connect(self.apply_link_scan_results)
+        self.link_scan_failed.connect(self.on_link_scan_failed)
 
     def normalize_url(self, text: str) -> str:
         text = text.strip()
@@ -260,7 +289,6 @@ class MainWindow(QMainWindow):
         self.url_bar.setText(normalized)
 
     def go_to_url(self):
-        self.reset_network_stats()
         self.load_url(self.url_bar.text())
 
     def update_url_bar(self, qurl: QUrl):
@@ -274,14 +302,23 @@ class MainWindow(QMainWindow):
         else:
             self.security_output.setPlainText("[ERROR] Page failed to load.")
 
+    def on_load_started(self):
+        self.reset_network_stats()
+        self.reset_link_scan_state()
+
     def toggle_request_blocking(self):
         enabled = not self.network_interceptor.blocking_enabled
         self.network_interceptor.set_blocking_enabled(enabled)
         self.blocking_btn.setText("BLOCKING ON" if enabled else "BLOCKING OFF")
 
+    def reset_link_scan_state(self):
+        self.link_scan_btn.setEnabled(True)
+        self.link_scan_btn.setText("SCAN LINKS")
+
     def reset_network_stats(self):
         self.blocked_count = 0
         self.allowed_count = 0
+        self.network_events.clear()
         self.network_table.setRowCount(0)
         self.update_network_stats()
 
@@ -308,11 +345,13 @@ class MainWindow(QMainWindow):
         if self.security_dock.isFloating():
             self.security_dock.setFloating(False)
 
+        self.console_splitter.setOrientation(Qt.Horizontal)
+        self.console_splitter.setSizes([980, 260])
         self.addDockWidget(Qt.BottomDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
             [self.security_dock],
-            [260],
+            [360],
             Qt.Vertical,
         )
 
@@ -322,11 +361,13 @@ class MainWindow(QMainWindow):
         if self.security_dock.isFloating():
             self.security_dock.setFloating(False)
 
+        self.console_splitter.setOrientation(Qt.Vertical)
+        self.console_splitter.setSizes([620, 220])
         self.addDockWidget(Qt.RightDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
             [self.security_dock],
-            [360],
+            [520],
             Qt.Horizontal,
         )
 
@@ -356,25 +397,148 @@ class MainWindow(QMainWindow):
         lines = []
         lines.append(f"Target: {result['url']}")
         lines.append(f"HTTP Status: {result['status_code']}")
-        lines.append(f"Security Score: {result['score']} / 100")
+        lines.append(f"Score: {result['score']} / 100")
         lines.append(f"Grade: {result['grade']}")
         lines.append("")
-        lines.append("=== Findings ===")
+        lines.append("Header Findings")
 
         for finding in result["findings"]:
             prefix = "[+]" if finding.status == "OK" else "[-]"
-
-            lines.append(f"{prefix} {finding.name}")
-            lines.append(f"    Status: {finding.status}")
-            lines.append(f"    Score: {finding.score}")
-            lines.append(f"    {finding.message}")
-            lines.append("")
+            lines.append(
+                f"{prefix} {finding.name}: {finding.status} ({finding.score})"
+            )
 
         self.security_output.setPlainText("\n".join(lines))
 
         if show_console:
             self.security_dock.show()
             self.security_dock.raise_()
+
+    def scan_page_links(self):
+        if not self.link_scanner.is_configured():
+            self.security_output.setPlainText(
+                "[ERROR] VIRUSTOTAL_API_KEY is not set.\n\n"
+                "Set the API key in your environment, then restart the app."
+            )
+            self.security_dock.show()
+            self.security_dock.raise_()
+            return
+
+        self.link_scan_btn.setEnabled(False)
+        self.link_scan_btn.setText("SCANNING...")
+        self.security_output.setPlainText("[*] Collecting page links...\n")
+
+        script = """
+        (() => {
+            const anchors = Array.from(document.querySelectorAll('a[href]'));
+            const urls = anchors
+                .map((anchor) => anchor.href)
+                .filter((href) => /^https?:\\/\\//i.test(href));
+            return Array.from(new Set(urls));
+        })();
+        """
+        self.browser.page().runJavaScript(script, self.start_link_scan)
+
+    def start_link_scan(self, urls: list[str]):
+        if not urls:
+            self.link_scan_btn.setEnabled(True)
+            self.link_scan_btn.setText("SCAN LINKS")
+            self.security_output.setPlainText("[*] No http/https links found.")
+            return
+
+        self.security_output.setPlainText(
+            f"[*] Submitting {len(urls)} unique links to VirusTotal...\n"
+        )
+
+        worker = Thread(
+            target=self.run_link_scan_worker,
+            args=(urls,),
+            daemon=True,
+        )
+        worker.start()
+
+    def run_link_scan_worker(self, urls: list[str]):
+        try:
+            results = self.link_scanner.scan_urls(urls)
+            payload = [result.__dict__ for result in results]
+            self.link_scan_finished.emit(payload)
+        except Exception as exc:
+            self.link_scan_failed.emit(str(exc))
+
+    def apply_link_scan_results(self, results: list[dict]):
+        self.link_scan_btn.setEnabled(True)
+        self.link_scan_btn.setText("SCAN LINKS")
+        self.inject_link_safety_badges(results)
+
+        counts = {"SAFE": 0, "WARN": 0, "RISK": 0, "UNKNOWN": 0}
+        for result in results:
+            counts[result.get("label", "UNKNOWN")] = (
+                counts.get(result.get("label", "UNKNOWN"), 0) + 1
+            )
+
+        lines = [
+            "VirusTotal Link Scan",
+            f"Scanned: {len(results)}",
+            f"SAFE: {counts['SAFE']}",
+            f"WARN: {counts['WARN']}",
+            f"RISK: {counts['RISK']}",
+            f"UNKNOWN: {counts['UNKNOWN']}",
+        ]
+        self.security_output.setPlainText("\n".join(lines))
+
+    def on_link_scan_failed(self, error: str):
+        self.link_scan_btn.setEnabled(True)
+        self.link_scan_btn.setText("SCAN LINKS")
+        self.security_output.setPlainText(
+            f"[ERROR] VirusTotal link scan failed.\n\n{error}"
+        )
+
+    def inject_link_safety_badges(self, results: list[dict]):
+        results_json = json.dumps(results)
+        script = f"""
+        (() => {{
+            const results = {results_json};
+            const byUrl = new Map(results.map((result) => [result.url, result]));
+            const colors = {{
+                SAFE: {{ fg: '#001b0e', bg: '#00ff88', border: '#00ff88' }},
+                WARN: {{ fg: '#1f1700', bg: '#ffcc00', border: '#ffcc00' }},
+                RISK: {{ fg: '#240000', bg: '#ff6666', border: '#ff6666' }},
+                UNKNOWN: {{ fg: '#d8ffe8', bg: '#203027', border: '#6f8f7d' }},
+            }};
+
+            document
+                .querySelectorAll('.shadow-link-risk-badge')
+                .forEach((badge) => badge.remove());
+
+            Array.from(document.querySelectorAll('a[href]')).forEach((anchor) => {{
+                const result = byUrl.get(anchor.href);
+                if (!result) {{
+                    return;
+                }}
+
+                const palette = colors[result.label] || colors.UNKNOWN;
+                const badge = document.createElement('span');
+                badge.className = 'shadow-link-risk-badge';
+                badge.textContent = result.label;
+                badge.title = result.summary;
+                badge.style.display = 'inline-block';
+                badge.style.marginLeft = '6px';
+                badge.style.padding = '1px 5px';
+                badge.style.border = `1px solid ${{palette.border}}`;
+                badge.style.borderRadius = '3px';
+                badge.style.background = palette.bg;
+                badge.style.color = palette.fg;
+                badge.style.fontSize = '10px';
+                badge.style.fontWeight = '700';
+                badge.style.lineHeight = '1.4';
+                badge.style.verticalAlign = 'middle';
+                badge.style.zIndex = '2147483647';
+
+                anchor.insertAdjacentElement('afterend', badge);
+            }});
+        }})();
+        """
+        self.browser.page().runJavaScript(script)
             
     def add_network_row(
         self,
@@ -383,6 +547,7 @@ class MainWindow(QMainWindow):
         resource_type: str,
         action: str,
         reason: str,
+        first_party: str,
     ):
         if action == "BLOCKED":
             self.blocked_count += 1
@@ -395,6 +560,16 @@ class MainWindow(QMainWindow):
         self.network_table.insertRow(row)
     
         now = QDateTime.currentDateTime().toString("HH:mm:ss.zzz")
+        event = {
+            "time": now,
+            "action": action,
+            "method": method,
+            "resource_type": resource_type,
+            "reason": reason,
+            "url": url,
+            "first_party": first_party,
+        }
+        self.network_events.append(event)
 
         values = [now, action, method, resource_type, reason, url]
         color = QColor("#ff6666") if action == "BLOCKED" else QColor("#00ff88")
@@ -408,3 +583,74 @@ class MainWindow(QMainWindow):
             self.network_table.setItem(row, column, item)
     
         self.network_table.scrollToBottom()
+
+    def show_network_detail(self, row: int, column: int):
+        if row < 0 or row >= len(self.network_events):
+            return
+
+        event = self.network_events[row]
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Network Request Detail")
+        dialog.resize(760, 560)
+
+        layout = QVBoxLayout(dialog)
+        title = QLabel("REQUEST DETAIL")
+        title.setObjectName("SubPanelTitle")
+
+        detail_output = QTextEdit()
+        detail_output.setReadOnly(True)
+        detail_output.setPlainText(self.format_network_detail(event))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addWidget(title)
+        layout.addWidget(detail_output)
+        layout.addWidget(buttons)
+
+        dialog.exec()
+
+    def format_network_detail(self, event: dict) -> str:
+        request_url = QUrl(event["url"])
+        first_party_url = QUrl(event["first_party"])
+        query = QUrlQuery(request_url)
+
+        lines = [
+            "Summary",
+            f"  Time: {event['time']}",
+            f"  Action: {event['action']}",
+            f"  Reason: {event['reason'] or 'None'}",
+            f"  Method: {event['method']}",
+            f"  Resource Type: {event['resource_type']}",
+            "",
+            "Request URL",
+            f"  Full URL: {event['url']}",
+            f"  Scheme: {request_url.scheme() or 'N/A'}",
+            f"  Host: {request_url.host() or 'N/A'}",
+            f"  Port: {request_url.port() if request_url.port() != -1 else 'Default'}",
+            f"  Path: {request_url.path() or '/'}",
+            "",
+            "First Party",
+            f"  Full URL: {event['first_party'] or 'N/A'}",
+            f"  Host: {first_party_url.host() or 'N/A'}",
+            "",
+            "Query Parameters",
+        ]
+
+        query_items = query.queryItems()
+        if query_items:
+            for key, value in query_items:
+                lines.append(f"  {key}: {value}")
+        else:
+            lines.append("  None")
+
+        lines.extend(
+            [
+                "",
+                "Capture Note",
+                "  QWebEngine exposes request metadata here, not raw TCP bytes,",
+                "  request bodies, or response bodies.",
+            ]
+        )
+
+        return "\n".join(lines)
