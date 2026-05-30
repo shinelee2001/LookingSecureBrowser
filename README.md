@@ -1,4 +1,4 @@
-# ShadowBrowser
+# LookingSecureBrowser
 
 Security-focused Python web browser prototype built with PySide6 and Qt WebEngine.
 

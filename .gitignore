@@ -2,5 +2,10 @@
 __pycache__/
 *.pyc
 
+# Virtual environments and local package metadata
+venv/
+.venv/
+*.egg-info/
+
 # Local secrets
 .env
