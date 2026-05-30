@@ -52,6 +52,8 @@ class MainWindow(QMainWindow):
         self.allowed_count = 0
         self.network_events = []
         self.link_scanner = VirusTotalUrlScanner()
+        self.link_scan_total_urls = 0
+        self.link_scan_submitted_urls = 0
 
         # Network tab style request table
         self.network_table = QTableWidget()
@@ -430,36 +432,93 @@ class MainWindow(QMainWindow):
 
         script = """
         (() => {
-            const anchors = Array.from(document.querySelectorAll('a[href]'));
+            const anchors = Array.from(document.links || document.querySelectorAll('a[href]'));
             const urls = anchors
-                .map((anchor) => anchor.href)
-                .filter((href) => /^https?:\\/\\//i.test(href));
-            return Array.from(new Set(urls));
+                .map((anchor) => {
+                    const rawHref = anchor.getAttribute('href') || '';
+                    const resolvedHref = anchor.href || rawHref;
+
+                    if (/^https?:\\/\\//i.test(rawHref)) {
+                        return rawHref;
+                    }
+
+                    if (/^https?:\\/\\//i.test(resolvedHref)) {
+                        return resolvedHref;
+                    }
+
+                    return '';
+                })
+                .filter(Boolean);
+
+            return JSON.stringify({
+                totalAnchors: anchors.length,
+                urls: Array.from(new Set(urls)),
+            });
         })();
         """
         self.browser.page().runJavaScript(script, self.start_link_scan)
 
-    def start_link_scan(self, urls: list[str]):
+    def start_link_scan(self, payload):
+        total_anchors = 0
+        urls = []
+
+        try:
+            if isinstance(payload, str):
+                data = json.loads(payload)
+                total_anchors = int(data.get("totalAnchors", 0))
+                urls = data.get("urls", [])
+            elif isinstance(payload, dict):
+                total_anchors = int(payload.get("totalAnchors", 0))
+                urls = payload.get("urls", [])
+            elif isinstance(payload, list):
+                urls = payload
+                total_anchors = len(payload)
+        except Exception as exc:
+            self.link_scan_btn.setEnabled(True)
+            self.link_scan_btn.setText("SCAN LINKS")
+            self.security_output.setPlainText(
+                f"[ERROR] Failed to parse page links.\n\n{exc}"
+            )
+            return
+
+        urls = [
+            url
+            for url in urls
+            if isinstance(url, str) and url.startswith(("http://", "https://"))
+        ]
+
         if not urls:
             self.link_scan_btn.setEnabled(True)
             self.link_scan_btn.setText("SCAN LINKS")
-            self.security_output.setPlainText("[*] No http/https links found.")
+            self.security_output.setPlainText(
+                "[*] No http/https links found.\n\n"
+                f"Anchors found in current page: {total_anchors}"
+            )
             return
 
+        self.link_scan_total_urls = len(urls)
+        self.link_scan_submitted_urls = min(
+            len(urls),
+            self.link_scanner.free_url_scan_limit,
+        )
+
         self.security_output.setPlainText(
-            f"[*] Submitting {len(urls)} unique links to VirusTotal...\n"
+            f"[*] Found {self.link_scan_total_urls} unique links.\n"
+            f"[*] Submitting {self.link_scan_submitted_urls} links to VirusTotal.\n"
+            "[*] Free API: 4 lookups/minute. URL scan uses about "
+            f"{self.link_scanner.lookups_per_url_scan} lookups per URL.\n"
         )
 
         worker = Thread(
             target=self.run_link_scan_worker,
-            args=(urls,),
+            args=(urls, self.link_scan_submitted_urls),
             daemon=True,
         )
         worker.start()
 
-    def run_link_scan_worker(self, urls: list[str]):
+    def run_link_scan_worker(self, urls: list[str], max_urls: int):
         try:
-            results = self.link_scanner.scan_urls(urls)
+            results = self.link_scanner.scan_urls(urls, max_urls=max_urls)
             payload = [result.__dict__ for result in results]
             self.link_scan_finished.emit(payload)
         except Exception as exc:
@@ -478,7 +537,10 @@ class MainWindow(QMainWindow):
 
         lines = [
             "VirusTotal Link Scan",
+            f"Found: {self.link_scan_total_urls}",
             f"Scanned: {len(results)}",
+            f"Skipped for free lookup limit: {max(self.link_scan_total_urls - len(results), 0)}",
+            f"Lookup budget used: about {len(results) * self.link_scanner.lookups_per_url_scan}",
             f"SAFE: {counts['SAFE']}",
             f"WARN: {counts['WARN']}",
             f"RISK: {counts['RISK']}",
