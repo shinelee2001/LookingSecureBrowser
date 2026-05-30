@@ -22,11 +22,16 @@ venv\Scripts\python.exe main.py
 ## VirusTotal API
 
 Link scanning requires a VirusTotal API key.
+The free public API is limited and should not be used for business workflows, commercial products, or services.
+ShadowBrowser handles it conservatively: one `SCAN LINKS` run submits up to 2 URLs because each URL scan uses about 2 lookups and the free rate is 4 lookups/minute.
 
-```powershell
-$env:VIRUSTOTAL_API_KEY="your_api_key_here"
-venv\Scripts\python.exe main.py
+Create a local `.env` file:
+
+```env
+VIRUSTOTAL_API_KEY=your_api_key_here
 ```
+
+`.env` is ignored by git. Use `.env.example` as the template.
 
 ## Status
 
