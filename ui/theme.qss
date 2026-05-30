@@ -30,6 +30,11 @@ QPushButton:hover {
     border: 1px solid #00ff88;
 }
 
+#ConsoleToolButton {
+    padding: 3px 8px;
+    font-size: 12px;
+}
+
 QTextEdit {
     background-color: #020402;
     color: #00ff88;

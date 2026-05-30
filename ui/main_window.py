@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QDialog,
     QDialogButtonBox,
+    QAbstractItemView,
 )
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -88,7 +89,7 @@ class MainWindow(QMainWindow):
         self.forward_btn = QPushButton("→")
         self.reload_btn = QPushButton("⟳")
         self.go_btn = QPushButton("GO")
-        self.scan_btn = QPushButton("SCAN")
+        self.scan_btn = QPushButton("SCAN HEADERS")
         self.link_scan_btn = QPushButton("SCAN LINKS")
         self.blocking_btn = QPushButton("BLOCKING OFF")
         self.console_btn = QPushButton("CONSOLE")
@@ -106,8 +107,6 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.link_scan_btn)
         nav_bar.addWidget(self.blocking_btn)
         nav_bar.addWidget(self.console_btn)
-        nav_bar.addWidget(self.dock_bottom_btn)
-        nav_bar.addWidget(self.dock_right_btn)
 
         root_layout.addLayout(nav_bar)
         root_layout.addWidget(self.browser)
@@ -150,6 +149,8 @@ class MainWindow(QMainWindow):
 
         title = QLabel("SECURITY CONSOLE")
         title.setObjectName("PanelTitle")
+        self.dock_bottom_btn.setObjectName("ConsoleToolButton")
+        self.dock_right_btn.setObjectName("ConsoleToolButton")
     
         self.score_label.setObjectName("ScoreLabel")
         self.grade_label.setObjectName("GradeLabel")
@@ -157,6 +158,8 @@ class MainWindow(QMainWindow):
         self.allowed_label.setObjectName("AllowedLabel")
     
         title_row.addWidget(title)
+        title_row.addWidget(self.dock_bottom_btn)
+        title_row.addWidget(self.dock_right_btn)
         title_row.addStretch()
         title_row.addWidget(self.allowed_label)
         title_row.addWidget(self.blocked_label)
@@ -418,41 +421,59 @@ class MainWindow(QMainWindow):
 
     def scan_page_links(self):
         if not self.link_scanner.is_configured():
-            self.security_output.setPlainText(
-                "[ERROR] VIRUSTOTAL_API_KEY is not set.\n\n"
-                "Set the API key in your environment, then restart the app."
+            self.show_link_scan_message(
+                "VirusTotal API Key Missing",
+                "VIRUSTOTAL_API_KEY is not set.\n\n"
+                "Add it to your local .env file, then restart the app.",
             )
-            self.security_dock.show()
-            self.security_dock.raise_()
             return
 
         self.link_scan_btn.setEnabled(False)
-        self.link_scan_btn.setText("SCANNING...")
-        self.security_output.setPlainText("[*] Collecting page links...\n")
+        self.link_scan_btn.setText("COLLECTING...")
 
         script = """
         (() => {
             const anchors = Array.from(document.links || document.querySelectorAll('a[href]'));
-            const urls = anchors
+            const isVisible = (element) => {
+                const style = window.getComputedStyle(element);
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    style.opacity !== '0' &&
+                    element.getClientRects().length > 0
+                );
+            };
+
+            const links = anchors
+                .filter(isVisible)
                 .map((anchor) => {
                     const rawHref = anchor.getAttribute('href') || '';
                     const resolvedHref = anchor.href || rawHref;
+                    const text = (anchor.innerText || anchor.textContent || '').trim();
 
                     if (/^https?:\\/\\//i.test(rawHref)) {
-                        return rawHref;
+                        return { source: 'PAGE LINK', text, url: rawHref };
                     }
 
                     if (/^https?:\\/\\//i.test(resolvedHref)) {
-                        return resolvedHref;
+                        return { source: 'PAGE LINK', text, url: resolvedHref };
                     }
 
-                    return '';
+                    return null;
                 })
                 .filter(Boolean);
 
+            const byUrl = new Map();
+            links.forEach((link) => {
+                if (!byUrl.has(link.url)) {
+                    byUrl.set(link.url, link);
+                }
+            });
+
             return JSON.stringify({
                 totalAnchors: anchors.length,
-                urls: Array.from(new Set(urls)),
+                visibleAnchors: anchors.filter(isVisible).length,
+                links: Array.from(byUrl.values()),
             });
         })();
         """
@@ -460,58 +481,65 @@ class MainWindow(QMainWindow):
 
     def start_link_scan(self, payload):
         total_anchors = 0
-        urls = []
+        visible_anchors = 0
+        link_entries = []
 
         try:
             if isinstance(payload, str):
                 data = json.loads(payload)
                 total_anchors = int(data.get("totalAnchors", 0))
-                urls = data.get("urls", [])
+                visible_anchors = int(data.get("visibleAnchors", 0))
+                link_entries = data.get("links", [])
             elif isinstance(payload, dict):
                 total_anchors = int(payload.get("totalAnchors", 0))
-                urls = payload.get("urls", [])
+                visible_anchors = int(payload.get("visibleAnchors", 0))
+                link_entries = payload.get("links", [])
             elif isinstance(payload, list):
-                urls = payload
+                link_entries = [{"source": "PAGE LINK", "text": "", "url": url} for url in payload]
                 total_anchors = len(payload)
+                visible_anchors = len(payload)
         except Exception as exc:
             self.link_scan_btn.setEnabled(True)
             self.link_scan_btn.setText("SCAN LINKS")
-            self.security_output.setPlainText(
-                f"[ERROR] Failed to parse page links.\n\n{exc}"
+            self.show_link_scan_message(
+                "Link Collection Failed",
+                f"Failed to parse page links.\n\n{exc}",
             )
             return
 
-        urls = [
-            url
-            for url in urls
-            if isinstance(url, str) and url.startswith(("http://", "https://"))
+        link_entries = [
+            entry
+            for entry in link_entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("url"), str)
+            and entry["url"].startswith(("http://", "https://"))
         ]
 
-        if not urls:
+        if not link_entries:
             self.link_scan_btn.setEnabled(True)
             self.link_scan_btn.setText("SCAN LINKS")
-            self.security_output.setPlainText(
-                "[*] No http/https links found.\n\n"
-                f"Anchors found in current page: {total_anchors}"
+            self.show_link_scan_message(
+                "No Links Found",
+                "No http/https links found.\n\n"
+                f"Anchors found in current page: {total_anchors}\n"
+                f"Visible anchors: {visible_anchors}",
             )
             return
 
-        self.link_scan_total_urls = len(urls)
-        self.link_scan_submitted_urls = min(
-            len(urls),
-            self.link_scanner.free_url_scan_limit,
-        )
+        selected_urls = self.show_link_selection_dialog(link_entries)
+        if not selected_urls:
+            self.link_scan_btn.setEnabled(True)
+            self.link_scan_btn.setText("SCAN LINKS")
+            return
 
-        self.security_output.setPlainText(
-            f"[*] Found {self.link_scan_total_urls} unique links.\n"
-            f"[*] Submitting {self.link_scan_submitted_urls} links to VirusTotal.\n"
-            "[*] Free API: 4 lookups/minute. URL scan uses about "
-            f"{self.link_scanner.lookups_per_url_scan} lookups per URL.\n"
-        )
+        self.link_scan_total_urls = len(link_entries)
+        self.link_scan_submitted_urls = len(selected_urls)
+
+        self.link_scan_btn.setText("SCANNING...")
 
         worker = Thread(
             target=self.run_link_scan_worker,
-            args=(urls, self.link_scan_submitted_urls),
+            args=(selected_urls, self.link_scan_submitted_urls),
             daemon=True,
         )
         worker.start()
@@ -528,32 +556,243 @@ class MainWindow(QMainWindow):
         self.link_scan_btn.setEnabled(True)
         self.link_scan_btn.setText("SCAN LINKS")
         self.inject_link_safety_badges(results)
-
-        counts = {"SAFE": 0, "WARN": 0, "RISK": 0, "UNKNOWN": 0}
-        for result in results:
-            counts[result.get("label", "UNKNOWN")] = (
-                counts.get(result.get("label", "UNKNOWN"), 0) + 1
-            )
-
-        lines = [
-            "VirusTotal Link Scan",
-            f"Found: {self.link_scan_total_urls}",
-            f"Scanned: {len(results)}",
-            f"Skipped for free lookup limit: {max(self.link_scan_total_urls - len(results), 0)}",
-            f"Lookup budget used: about {len(results) * self.link_scanner.lookups_per_url_scan}",
-            f"SAFE: {counts['SAFE']}",
-            f"WARN: {counts['WARN']}",
-            f"RISK: {counts['RISK']}",
-            f"UNKNOWN: {counts['UNKNOWN']}",
-        ]
-        self.security_output.setPlainText("\n".join(lines))
+        self.show_link_scan_results_dialog(results)
 
     def on_link_scan_failed(self, error: str):
         self.link_scan_btn.setEnabled(True)
         self.link_scan_btn.setText("SCAN LINKS")
-        self.security_output.setPlainText(
-            f"[ERROR] VirusTotal link scan failed.\n\n{error}"
+        self.show_link_scan_message(
+            "VirusTotal Link Scan Failed",
+            f"VirusTotal link scan failed.\n\n{error}",
         )
+
+    def show_link_selection_dialog(self, link_entries: list[dict]) -> list[str]:
+        limit = self.link_scanner.free_url_scan_limit
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Links to Scan")
+        dialog.resize(900, 520)
+        dialog.selected_urls = []
+
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel("SELECT LINKS FOR VIRUSTOTAL SCAN")
+        title.setObjectName("SubPanelTitle")
+
+        hint = QLabel(
+            f"Found {len(link_entries)} rendered page links. "
+            f"Check up to {limit} links to stay within the free API lookup limit. "
+            "Network traffic URLs are listed separately in the Network Traffic table."
+        )
+        selected_label = QLabel("Selected: 0")
+        selected_label.setObjectName("AllowedLabel")
+        meta_row = QHBoxLayout()
+        meta_row.addWidget(hint)
+        meta_row.addStretch()
+        meta_row.addWidget(selected_label)
+
+        network_note = QLabel(
+            "Source: PAGE LINK means the URL exists as a visible anchor in the rendered page."
+        )
+        warning = QLabel("")
+        warning.setObjectName("BlockedLabel")
+
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Select", "Source", "Text", "URL"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setRowCount(len(link_entries))
+
+        for row, entry in enumerate(link_entries):
+            checkbox = QTableWidgetItem("")
+            checkbox.setFlags(
+                Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            )
+            checkbox.setCheckState(Qt.Checked if row < limit else Qt.Unchecked)
+
+            source_item = QTableWidgetItem(entry.get("source", "PAGE LINK"))
+            text_item = QTableWidgetItem(entry.get("text", ""))
+            url_item = QTableWidgetItem(entry.get("url", ""))
+
+            table.setItem(row, 0, checkbox)
+            table.setItem(row, 1, source_item)
+            table.setItem(row, 2, text_item)
+            table.setItem(row, 3, url_item)
+
+        def checked_rows() -> list[int]:
+            rows = []
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item and item.checkState() == Qt.Checked:
+                    rows.append(row)
+            return rows
+
+        def update_selected_count():
+            count = len(checked_rows())
+            selected_label.setText(f"Selected: {count} / {limit}")
+            if count > limit:
+                warning.setText(f"Select up to {limit} links for this scan.")
+            elif count == 0:
+                warning.setText("Select at least one link.")
+            else:
+                warning.setText("")
+
+        table.itemChanged.connect(lambda item: update_selected_count())
+        update_selected_count()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+
+        def accept_selection():
+            selected_rows = checked_rows()
+
+            if not selected_rows:
+                warning.setText("Select at least one link.")
+                return
+
+            if len(selected_rows) > limit:
+                warning.setText(f"Select up to {limit} links for this scan.")
+                return
+
+            dialog.selected_urls = [link_entries[row]["url"] for row in selected_rows]
+            dialog.accept()
+
+        buttons.accepted.connect(accept_selection)
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addWidget(title)
+        layout.addLayout(meta_row)
+        layout.addWidget(network_note)
+        layout.addWidget(table)
+        layout.addWidget(warning)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return []
+
+        return dialog.selected_urls
+
+    def show_link_scan_results_dialog(self, results: list[dict]):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("VirusTotal Link Scan Results")
+        dialog.resize(1100, 560)
+
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel("VIRUSTOTAL LINK SCAN RESULTS")
+        title.setObjectName("SubPanelTitle")
+
+        counts = {"SAFE": 0, "WARN": 0, "RISK": 0, "UNKNOWN": 0}
+        for result in results:
+            label = result.get("label", "UNKNOWN")
+            counts[label] = counts.get(label, 0) + 1
+
+        summary = QLabel(
+            f"Found {self.link_scan_total_urls} links | "
+            f"Scanned {len(results)} | "
+            f"Skipped {max(self.link_scan_total_urls - len(results), 0)} | "
+            f"SAFE {counts['SAFE']} | WARN {counts['WARN']} | "
+            f"RISK {counts['RISK']} | UNKNOWN {counts['UNKNOWN']}"
+        )
+
+        table = QTableWidget()
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            [
+                "Verdict",
+                "Malicious",
+                "Suspicious",
+                "Harmless",
+                "Undetected",
+                "URL",
+            ]
+        )
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setRowCount(len(results))
+        table.setWordWrap(False)
+
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        table.setColumnWidth(0, 90)
+        table.setColumnWidth(1, 90)
+        table.setColumnWidth(2, 100)
+        table.setColumnWidth(3, 90)
+        table.setColumnWidth(4, 100)
+
+        for row, result in enumerate(results):
+            label = result.get("label", "UNKNOWN")
+            values = [
+                label,
+                str(result.get("malicious", 0)),
+                str(result.get("suspicious", 0)),
+                str(result.get("harmless", 0)),
+                str(result.get("undetected", 0)),
+                result.get("url", ""),
+            ]
+
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setForeground(QBrush(self.link_result_color(label)))
+                if column == 5:
+                    item.setToolTip(
+                        f"{result.get('url', '')}\n\n{result.get('summary', '')}"
+                    )
+                table.setItem(row, column, item)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addWidget(title)
+        layout.addWidget(summary)
+        layout.addWidget(table)
+        layout.addWidget(buttons)
+
+        dialog.exec()
+
+    def show_link_scan_message(self, title: str, message: str):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(520, 260)
+
+        layout = QVBoxLayout(dialog)
+        title_label = QLabel(title.upper())
+        title_label.setObjectName("SubPanelTitle")
+
+        body = QTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(message)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addWidget(title_label)
+        layout.addWidget(body)
+        layout.addWidget(buttons)
+
+        dialog.exec()
+
+    def link_result_color(self, label: str) -> QColor:
+        if label == "RISK":
+            return QColor("#ff6666")
+        if label == "WARN":
+            return QColor("#ffcc00")
+        if label == "SAFE":
+            return QColor("#00ff88")
+        return QColor("#d8ffe8")
 
     def inject_link_safety_badges(self, results: list[dict]):
         results_json = json.dumps(results)
@@ -573,7 +812,8 @@ class MainWindow(QMainWindow):
                 .forEach((badge) => badge.remove());
 
             Array.from(document.querySelectorAll('a[href]')).forEach((anchor) => {{
-                const result = byUrl.get(anchor.href);
+                const rawHref = anchor.getAttribute('href') || '';
+                const result = byUrl.get(anchor.href) || byUrl.get(rawHref);
                 if (!result) {{
                     return;
                 }}
