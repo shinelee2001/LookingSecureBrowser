@@ -408,10 +408,18 @@ class MainWindow(QMainWindow):
         lines.append("Header Findings")
 
         for finding in result["findings"]:
-            prefix = "[+]" if finding.status == "OK" else "[-]"
+            prefix = "[+]" if finding.status == "OK" else "[!]"
             lines.append(
-                f"{prefix} {finding.name}: {finding.status} ({finding.score})"
+                f"{prefix} {finding.name}: {finding.status} "
+                f"[{finding.severity}] ({finding.score}/{finding.max_score})"
             )
+            lines.append(f"    {finding.message}")
+
+            if finding.evidence:
+                lines.append(f"    Evidence: {finding.evidence}")
+
+            if finding.recommendation:
+                lines.append(f"    Fix: {finding.recommendation}")
 
         self.security_output.setPlainText("\n".join(lines))
 
