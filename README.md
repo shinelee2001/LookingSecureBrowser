@@ -12,6 +12,7 @@ Security-focused Python web browser prototype built with PySide6 and Qt WebEngin
 - Optional request blocking for tracker-like URLs and mixed HTTP subresources
 - Double-click request details in the network table
 - VirusTotal-based link safety scan for `http://` and `https://` page links
+- MITRE ATT&CK candidate mapping for observed header, network, and risky-link signals
 
 ## Run
 
