@@ -25,6 +25,13 @@ from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from core.header_analyzer import analyze_headers
+from core.mitre_attack_mapper import (
+    combine_mappings,
+    format_mitre_report,
+    map_header_findings,
+    map_link_scan_results,
+    map_network_events,
+)
 from core.network_interceptor import NetworkEventBus, NetworkInterceptor
 from core.virustotal_url_scanner import VirusTotalUrlScanner
 
@@ -52,12 +59,16 @@ class MainWindow(QMainWindow):
         self.blocked_count = 0
         self.allowed_count = 0
         self.network_events = []
+        self.last_header_findings = []
+        self.last_link_scan_results = []
         self.link_scanner = VirusTotalUrlScanner()
         self.link_scan_total_urls = 0
         self.link_scan_submitted_urls = 0
 
         # Network tab style request table
         self.network_table = QTableWidget()
+        self.mitre_output = QTextEdit()
+        self.mitre_output.setReadOnly(True)
 
         # Browser request interceptor
         self.network_event_bus = NetworkEventBus()
@@ -168,7 +179,7 @@ class MainWindow(QMainWindow):
 
         security_layout.addWidget(summary_bar)
     
-        # Console body: network first, header scan second.
+        # Console body: network first, MITRE mapping second, header scan third.
         self.console_splitter = QSplitter(Qt.Horizontal)
     
         # Header scan summary
@@ -226,14 +237,29 @@ class MainWindow(QMainWindow):
     
         network_layout.addWidget(network_title)
         network_layout.addWidget(self.network_table)
+
+        mitre_frame = QFrame()
+        mitre_frame.setObjectName("MitrePanel")
+        mitre_layout = QVBoxLayout(mitre_frame)
+        mitre_layout.setContentsMargins(0, 0, 0, 0)
+        mitre_layout.setSpacing(6)
+
+        mitre_title = QLabel("MITRE ATT&CK")
+        mitre_title.setObjectName("SubPanelTitle")
+        self.mitre_output.setPlainText(format_mitre_report([]))
+
+        mitre_layout.addWidget(mitre_title)
+        mitre_layout.addWidget(self.mitre_output)
     
         self.console_splitter.addWidget(network_frame)
+        self.console_splitter.addWidget(mitre_frame)
         self.console_splitter.addWidget(findings_frame)
     
         # Give network traffic most of the console area.
         self.console_splitter.setStretchFactor(0, 4)
-        self.console_splitter.setStretchFactor(1, 1)
-        self.console_splitter.setSizes([980, 260])
+        self.console_splitter.setStretchFactor(1, 2)
+        self.console_splitter.setStretchFactor(2, 1)
+        self.console_splitter.setSizes([760, 360, 260])
     
         security_layout.addWidget(self.console_splitter, 1)
     
@@ -319,6 +345,8 @@ class MainWindow(QMainWindow):
     def reset_link_scan_state(self):
         self.link_scan_btn.setEnabled(True)
         self.link_scan_btn.setText("SCAN LINKS")
+        self.last_link_scan_results = []
+        self.update_mitre_panel()
 
     def reset_network_stats(self):
         self.blocked_count = 0
@@ -326,6 +354,7 @@ class MainWindow(QMainWindow):
         self.network_events.clear()
         self.network_table.setRowCount(0)
         self.update_network_stats()
+        self.update_mitre_panel()
 
     def update_network_stats(self):
         self.blocked_label.setText(f"Blocked: {self.blocked_count}")
@@ -351,7 +380,7 @@ class MainWindow(QMainWindow):
             self.security_dock.setFloating(False)
 
         self.console_splitter.setOrientation(Qt.Horizontal)
-        self.console_splitter.setSizes([980, 260])
+        self.console_splitter.setSizes([760, 360, 260])
         self.addDockWidget(Qt.BottomDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
@@ -367,7 +396,7 @@ class MainWindow(QMainWindow):
             self.security_dock.setFloating(False)
 
         self.console_splitter.setOrientation(Qt.Vertical)
-        self.console_splitter.setSizes([620, 220])
+        self.console_splitter.setSizes([420, 260, 220])
         self.addDockWidget(Qt.RightDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
@@ -386,6 +415,8 @@ class MainWindow(QMainWindow):
         if not result["ok"]:
             self.score_label.setText("Score: N/A")
             self.grade_label.setText("Grade: N/A")
+            self.last_header_findings = []
+            self.update_mitre_panel()
             self.security_output.setPlainText(
                 f"[ERROR] Failed to analyze target.\n\n{result['error']}"
             )
@@ -398,6 +429,8 @@ class MainWindow(QMainWindow):
 
         self.score_label.setText(f"Score: {result['score']} / 100")
         self.grade_label.setText(f"Grade: {result['grade']}")
+        self.last_header_findings = result["findings"]
+        self.update_mitre_panel()
 
         lines = []
         lines.append(f"Target: {result['url']}")
@@ -563,6 +596,8 @@ class MainWindow(QMainWindow):
     def apply_link_scan_results(self, results: list[dict]):
         self.link_scan_btn.setEnabled(True)
         self.link_scan_btn.setText("SCAN LINKS")
+        self.last_link_scan_results = results
+        self.update_mitre_panel()
         self.inject_link_safety_badges(results)
         self.show_link_scan_results_dialog(results)
 
@@ -880,6 +915,7 @@ class MainWindow(QMainWindow):
             "first_party": first_party,
         }
         self.network_events.append(event)
+        self.update_mitre_panel()
 
         values = [now, action, method, resource_type, reason, url]
         color = QColor("#ff6666") if action == "BLOCKED" else QColor("#00ff88")
@@ -893,6 +929,14 @@ class MainWindow(QMainWindow):
             self.network_table.setItem(row, column, item)
     
         self.network_table.scrollToBottom()
+
+    def update_mitre_panel(self):
+        mappings = combine_mappings(
+            map_header_findings(self.last_header_findings),
+            map_network_events(self.network_events),
+            map_link_scan_results(self.last_link_scan_results),
+        )
+        self.mitre_output.setPlainText(format_mitre_report(mappings))
 
     def show_network_detail(self, row: int, column: int):
         if row < 0 or row >= len(self.network_events):
