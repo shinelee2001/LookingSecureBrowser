@@ -9,3 +9,8 @@ venv/
 
 # Local secrets
 .env
+
+# Local traffic analysis storage
+data/
+*.sqlite
+*.sqlite3
