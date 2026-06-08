@@ -1,5 +1,7 @@
 import json
+import time
 from threading import Thread
+from uuid import uuid4
 
 from PySide6.QtCore import QUrl, Qt, QDateTime, QUrlQuery, Signal
 from PySide6.QtWidgets import (
@@ -33,6 +35,7 @@ from core.mitre_attack_mapper import (
     map_network_events,
 )
 from core.network_interceptor import NetworkEventBus, NetworkInterceptor
+from core.traffic_ai_engine import BrowserTrafficAiEngine
 from core.virustotal_url_scanner import VirusTotalUrlScanner
 
 
@@ -64,11 +67,15 @@ class MainWindow(QMainWindow):
         self.link_scanner = VirusTotalUrlScanner()
         self.link_scan_total_urls = 0
         self.link_scan_submitted_urls = 0
+        self.ai_engine = BrowserTrafficAiEngine()
+        self.traffic_session_id = self.new_traffic_session_id()
 
         # Network tab style request table
         self.network_table = QTableWidget()
         self.mitre_output = QTextEdit()
         self.mitre_output.setReadOnly(True)
+        self.ai_output = QTextEdit()
+        self.ai_output.setReadOnly(True)
 
         # Browser request interceptor
         self.network_event_bus = NetworkEventBus()
@@ -102,6 +109,7 @@ class MainWindow(QMainWindow):
         self.go_btn = QPushButton("GO")
         self.scan_btn = QPushButton("SCAN HEADERS")
         self.link_scan_btn = QPushButton("SCAN LINKS")
+        self.ai_analyze_btn = QPushButton("AI ANALYZE")
         self.blocking_btn = QPushButton("BLOCKING OFF")
         self.console_btn = QPushButton("CONSOLE")
         self.dock_bottom_btn = QPushButton("BOTTOM")
@@ -116,6 +124,7 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.go_btn)
         nav_bar.addWidget(self.scan_btn)
         nav_bar.addWidget(self.link_scan_btn)
+        nav_bar.addWidget(self.ai_analyze_btn)
         nav_bar.addWidget(self.blocking_btn)
         nav_bar.addWidget(self.console_btn)
 
@@ -250,16 +259,35 @@ class MainWindow(QMainWindow):
 
         mitre_layout.addWidget(mitre_title)
         mitre_layout.addWidget(self.mitre_output)
+
+        ai_frame = QFrame()
+        ai_frame.setObjectName("AiPanel")
+        ai_layout = QVBoxLayout(ai_frame)
+        ai_layout.setContentsMargins(0, 0, 0, 0)
+        ai_layout.setSpacing(6)
+
+        ai_title = QLabel("AI TRAFFIC ANALYSIS")
+        ai_title.setObjectName("SubPanelTitle")
+        self.ai_output.setPlainText(
+            "No AI traffic analysis yet.\n\n"
+            "Network events are stored locally in SQLite. Click AI ANALYZE to run "
+            "unsupervised anomaly analysis on the current browsing session."
+        )
+
+        ai_layout.addWidget(ai_title)
+        ai_layout.addWidget(self.ai_output)
     
         self.console_splitter.addWidget(network_frame)
+        self.console_splitter.addWidget(ai_frame)
         self.console_splitter.addWidget(mitre_frame)
         self.console_splitter.addWidget(findings_frame)
     
         # Give network traffic most of the console area.
         self.console_splitter.setStretchFactor(0, 4)
         self.console_splitter.setStretchFactor(1, 2)
-        self.console_splitter.setStretchFactor(2, 1)
-        self.console_splitter.setSizes([760, 360, 260])
+        self.console_splitter.setStretchFactor(2, 2)
+        self.console_splitter.setStretchFactor(3, 1)
+        self.console_splitter.setSizes([700, 320, 300, 240])
     
         security_layout.addWidget(self.console_splitter, 1)
     
@@ -281,6 +309,7 @@ class MainWindow(QMainWindow):
         self.go_btn.clicked.connect(self.go_to_url)
         self.scan_btn.clicked.connect(self.scan_current_url)
         self.link_scan_btn.clicked.connect(self.scan_page_links)
+        self.ai_analyze_btn.clicked.connect(self.analyze_current_traffic)
         self.blocking_btn.clicked.connect(self.toggle_request_blocking)
         self.console_btn.clicked.connect(self.toggle_console)
 
@@ -349,12 +378,20 @@ class MainWindow(QMainWindow):
         self.update_mitre_panel()
 
     def reset_network_stats(self):
+        self.traffic_session_id = self.new_traffic_session_id()
         self.blocked_count = 0
         self.allowed_count = 0
         self.network_events.clear()
         self.network_table.setRowCount(0)
+        self.ai_output.setPlainText(
+            "Current page session reset.\n\n"
+            "Network events are being stored locally for lightweight anomaly analysis."
+        )
         self.update_network_stats()
         self.update_mitre_panel()
+
+    def new_traffic_session_id(self) -> str:
+        return f"session-{int(time.time())}-{uuid4().hex[:8]}"
 
     def update_network_stats(self):
         self.blocked_label.setText(f"Blocked: {self.blocked_count}")
@@ -380,7 +417,7 @@ class MainWindow(QMainWindow):
             self.security_dock.setFloating(False)
 
         self.console_splitter.setOrientation(Qt.Horizontal)
-        self.console_splitter.setSizes([760, 360, 260])
+        self.console_splitter.setSizes([700, 320, 300, 240])
         self.addDockWidget(Qt.BottomDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
@@ -396,7 +433,7 @@ class MainWindow(QMainWindow):
             self.security_dock.setFloating(False)
 
         self.console_splitter.setOrientation(Qt.Vertical)
-        self.console_splitter.setSizes([420, 260, 220])
+        self.console_splitter.setSizes([420, 260, 240, 220])
         self.addDockWidget(Qt.RightDockWidgetArea, self.security_dock)
 
         self.resizeDocks(
@@ -907,6 +944,7 @@ class MainWindow(QMainWindow):
         now = QDateTime.currentDateTime().toString("HH:mm:ss.zzz")
         event = {
             "time": now,
+            "ts": time.time(),
             "action": action,
             "method": method,
             "resource_type": resource_type,
@@ -915,6 +953,7 @@ class MainWindow(QMainWindow):
             "first_party": first_party,
         }
         self.network_events.append(event)
+        self.ai_engine.record_event(self.traffic_session_id, event)
         self.update_mitre_panel()
 
         values = [now, action, method, resource_type, reason, url]
@@ -937,6 +976,33 @@ class MainWindow(QMainWindow):
             map_link_scan_results(self.last_link_scan_results),
         )
         self.mitre_output.setPlainText(format_mitre_report(mappings))
+
+    def analyze_current_traffic(self):
+        report = self.ai_engine.analyze_session(self.traffic_session_id)
+        lines = [
+            report.summary,
+            "",
+            "Findings",
+        ]
+
+        if not report.findings:
+            lines.append("  None")
+        else:
+            for finding in report.findings:
+                lines.extend(
+                    [
+                        f"  [{finding.severity}] {finding.title} ({finding.score:.1f})",
+                        f"    Model: {finding.model_score:.1f} | Rules: {finding.rule_score:.1f}",
+                        f"    Reason: {finding.reason}",
+                        f"    Evidence: {finding.evidence}",
+                    ]
+                )
+                if finding.top_features:
+                    lines.append(f"    Top features: {', '.join(finding.top_features)}")
+
+        self.ai_output.setPlainText("\n".join(lines))
+        self.security_dock.show()
+        self.security_dock.raise_()
 
     def show_network_detail(self, row: int, column: int):
         if row < 0 or row >= len(self.network_events):
