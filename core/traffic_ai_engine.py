@@ -399,7 +399,10 @@ class TrafficRuleDetector:
                 )
             )
 
-        if features.domain_requests_per_minute >= 30:
+        if (
+            features.domain_requests_per_minute >= 30
+            and (features.is_third_party or features.is_tracker_like)
+        ):
             score += 20
             findings.append(
                 TrafficFinding(
@@ -610,7 +613,7 @@ class BrowserTrafficAiEngine:
             stored_risk = float(row.get("risk_score", 0.0))
             combined = min(100.0, max(model_score.anomaly_score, stored_risk))
 
-            if combined < 45 and not model_score.is_model_anomaly:
+            if not self.should_report_anomaly(row, stored_risk, model_score):
                 continue
 
             title = "Unsupervised traffic anomaly"
@@ -641,6 +644,30 @@ class BrowserTrafficAiEngine:
             )
 
         return sorted(findings, key=lambda finding: finding.score, reverse=True)[:10]
+
+    def should_report_anomaly(
+        self,
+        row: dict,
+        stored_risk: float,
+        model_score: ModelScore,
+    ) -> bool:
+        if stored_risk >= 20:
+            return True
+
+        if not model_score.is_model_anomaly or model_score.anomaly_score < 85:
+            return False
+
+        return any(
+            [
+                row.get("sensitive_query_count"),
+                row.get("is_http") and row.get("is_third_party"),
+                row.get("has_suspicious_keyword"),
+                row.get("is_tracker_like") and row.get("is_third_party"),
+                float(row.get("domain_entropy", 0)) >= 4.2,
+                float(row.get("path_entropy", 0)) >= 4.5,
+                int(row.get("url_length", 0)) >= 180,
+            ]
+        )
 
 
 def shannon_entropy(value: str) -> float:

@@ -43,6 +43,22 @@ Current engine layers:
 - `scikit-learn` IsolationForest anomaly detection with StandardScaler normalization, model anomaly scores, and top contributing feature hints
 - Explanation output designed to be replaceable later with a local LLM provider such as Ollama or llama.cpp
 
+## Traffic AI Evaluation
+
+Run the synthetic regression tests:
+
+```powershell
+venv\Scripts\python.exe -m unittest tests.test_traffic_ai_engine
+```
+
+Run the scenario evaluation report:
+
+```powershell
+venv\Scripts\python.exe scripts\evaluate_traffic_ai.py
+```
+
+The current test set covers normal static resources, normal first-party API traffic, sensitive query leakage, insecure third-party HTTP requests, injection-like URLs, and third-party request bursts.
+
 ## VirusTotal API
 
 Link scanning requires a VirusTotal API key.
