@@ -11,7 +11,7 @@ remaining lightweight and local-first.
 
 It is designed to:
 
-- Store request metadata in SQLite for a limited retention window
+- Store request metadata in SQLite with retention, event-count, and file-size caps
 - Avoid storing raw request bodies, cookies, authorization headers, or tokens
 - Extract compact security features from each request
 - Combine rule-based security signals with unsupervised anomaly detection
@@ -87,8 +87,16 @@ Retention defaults:
 
 - `DEFAULT_RETENTION_DAYS = 7`
 - `DEFAULT_MAX_EVENTS = 5000`
+- `DEFAULT_MAX_DB_SIZE_BYTES = 5 * 1024 * 1024`
 
-Cleanup runs during inserts, which keeps the database small for desktop use.
+Cleanup runs during inserts. It removes data older than the retention window and
+keeps only the newest events when the event cap is exceeded.
+
+The store also checks SQLite file size after inserts. If the database grows past
+the 5 MB default cap, it prunes the oldest events until the file can be compacted
+below the target range, then runs `VACUUM` so deleted rows release disk space.
+This matters because SQLite does not automatically shrink the database file after
+`DELETE` statements.
 
 ## Extracted Features
 
@@ -269,7 +277,7 @@ Run:
 venv\Scripts\python.exe -m unittest tests.test_traffic_ai_engine
 ```
 
-The tests verify three things:
+The tests verify five things:
 
 1. Scenario verdicts match expectations
 
@@ -285,6 +293,16 @@ The tests verify three things:
    With enough events, the engine should use `sklearn-isolation-forest` when
    available. If it falls back, the fallback reason should mention that sklearn
    was unavailable.
+
+4. The SQLite store enforces the event cap
+
+   When more than `DEFAULT_MAX_EVENTS` are stored, the oldest events are pruned
+   and the newest events remain available for session analysis.
+
+5. The SQLite store prunes when the database size cap is exceeded
+
+   When the file grows beyond `DEFAULT_MAX_DB_SIZE_BYTES`, old events are removed
+   and the database is compacted to keep local storage bounded.
 
 ## Evaluation Script
 

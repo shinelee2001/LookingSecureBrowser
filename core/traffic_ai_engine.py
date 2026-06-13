@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "traffic_ai.sqlite"
 DEFAULT_RETENTION_DAYS = 7
 DEFAULT_MAX_EVENTS = 5000
+DEFAULT_MAX_DB_SIZE_BYTES = 5 * 1024 * 1024
+DB_SIZE_PRUNE_TARGET_RATIO = 0.85
 
 SENSITIVE_QUERY_KEYS = {
     "access_token",
@@ -131,10 +133,12 @@ class SQLiteTrafficStore:
         db_path: Path = DEFAULT_DB_PATH,
         retention_days: int = DEFAULT_RETENTION_DAYS,
         max_events: int = DEFAULT_MAX_EVENTS,
+        max_db_size_bytes: int = DEFAULT_MAX_DB_SIZE_BYTES,
     ):
         self.db_path = db_path
         self.retention_days = retention_days
         self.max_events = max_events
+        self.max_db_size_bytes = max_db_size_bytes
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -255,6 +259,7 @@ class SQLiteTrafficStore:
             )
             self.cleanup(connection)
             connection.commit()
+            self.compact_if_needed()
             return int(cursor.lastrowid)
 
     def fetch_session_features(self, session_id: str, limit: int = 500) -> list[dict]:
@@ -301,6 +306,55 @@ class SQLiteTrafficStore:
             )
             """,
             (self.max_events,),
+        )
+
+    def compact_if_needed(self):
+        if self.max_db_size_bytes <= 0:
+            return
+
+        with closing(self.connect()) as connection:
+            target_size = int(self.max_db_size_bytes * DB_SIZE_PRUNE_TARGET_RATIO)
+            attempts = 0
+
+            if self.database_size_bytes(connection) <= self.max_db_size_bytes:
+                return
+
+            while (
+                self.database_size_bytes(connection) > target_size
+                and self.count_events(connection) > 0
+                and attempts < 10
+            ):
+                event_count = self.count_events(connection)
+                delete_count = max(1, math.ceil(event_count * 0.2))
+                connection.execute(
+                    """
+                    DELETE FROM network_events
+                    WHERE id IN (
+                        SELECT id FROM network_events ORDER BY ts ASC LIMIT ?
+                    )
+                    """,
+                    (delete_count,),
+                )
+                connection.commit()
+                connection.execute("VACUUM")
+                attempts += 1
+
+    def database_size_bytes(self, connection: sqlite3.Connection | None = None) -> int:
+        if connection is None:
+            with closing(self.connect()) as scoped_connection:
+                return self.database_size_bytes(scoped_connection)
+
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+        return int(page_size) * int(page_count)
+
+    def count_events(self, connection: sqlite3.Connection | None = None) -> int:
+        if connection is None:
+            with closing(self.connect()) as scoped_connection:
+                return self.count_events(scoped_connection)
+
+        return int(
+            connection.execute("SELECT COUNT(*) FROM network_events").fetchone()[0]
         )
 
 
@@ -569,8 +623,14 @@ class BrowserTrafficAiEngine:
         db_path: Path = DEFAULT_DB_PATH,
         retention_days: int = DEFAULT_RETENTION_DAYS,
         max_events: int = DEFAULT_MAX_EVENTS,
+        max_db_size_bytes: int = DEFAULT_MAX_DB_SIZE_BYTES,
     ):
-        self.store = SQLiteTrafficStore(db_path, retention_days, max_events)
+        self.store = SQLiteTrafficStore(
+            db_path,
+            retention_days,
+            max_events,
+            max_db_size_bytes,
+        )
         self.extractor = TrafficFeatureExtractor(self.store)
         self.rules = TrafficRuleDetector()
         self.analyzer = UnsupervisedTrafficAnalyzer()
