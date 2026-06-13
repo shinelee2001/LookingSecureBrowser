@@ -31,8 +31,21 @@ QPushButton:hover {
 }
 
 #ConsoleToolButton {
-    padding: 3px 8px;
-    font-size: 12px;
+    padding: 3px 7px;
+    font-size: 11px;
+}
+
+#ConsoleToolButton:checked {
+    background-color: #00aa55;
+    color: #020402;
+    border: 1px solid #00ff88;
+    font-weight: bold;
+}
+
+#ConsolePositionLabel {
+    color: #6f8f7d;
+    font-size: 11px;
+    font-weight: bold;
 }
 
 QTextEdit {

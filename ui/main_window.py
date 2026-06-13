@@ -1,6 +1,7 @@
 import json
 import time
 from threading import Thread
+from urllib.parse import quote_plus
 from uuid import uuid4
 
 from PySide6.QtCore import QUrl, Qt, QDateTime, QUrlQuery, Signal
@@ -39,14 +40,62 @@ from core.traffic_ai_engine import BrowserTrafficAiEngine
 from core.virustotal_url_scanner import VirusTotalUrlScanner
 
 
+GOOGLE_SEARCH_URL = "https://www.google.com/search?q="
+
+
+def normalize_browser_input(text: str) -> str:
+    text = text.strip()
+
+    if not text:
+        return "https://google.com"
+
+    if text.startswith(("http://", "https://")):
+        return text
+
+    if is_probable_url(text):
+        return "https://" + text
+
+    return GOOGLE_SEARCH_URL + quote_plus(text)
+
+
+def is_probable_url(text: str) -> bool:
+    if any(char.isspace() for char in text):
+        return False
+
+    host = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+
+    if not host:
+        return False
+
+    if ":" in host:
+        host, port = host.rsplit(":", 1)
+        if not port.isdigit():
+            return False
+
+    lowered_host = host.lower()
+    if lowered_host in {"localhost", "127.0.0.1"}:
+        return True
+
+    labels = lowered_host.split(".")
+    if len(labels) == 4 and all(label.isdigit() for label in labels):
+        return all(0 <= int(label) <= 255 for label in labels)
+
+    if len(labels) < 2 or any(not label for label in labels):
+        return False
+
+    tld = labels[-1]
+    return len(tld) >= 2 and tld.isalpha()
+
+
 class MainWindow(QMainWindow):
     link_scan_finished = Signal(list)
     link_scan_failed = Signal(str)
+    header_scan_finished = Signal(int, object, bool)
 
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("ShadowBrowser - Security Analysis Browser")
+        self.setWindowTitle("LookingSecureBrowser - Looking secure... hopefully really secure...")
         self.resize(1400, 850)
 
         self.browser = QWebEngineView()
@@ -69,6 +118,7 @@ class MainWindow(QMainWindow):
         self.link_scan_submitted_urls = 0
         self.ai_engine = BrowserTrafficAiEngine()
         self.traffic_session_id = self.new_traffic_session_id()
+        self.header_scan_id = 0
 
         # Network tab style request table
         self.network_table = QTableWidget()
@@ -106,14 +156,13 @@ class MainWindow(QMainWindow):
         self.back_btn = QPushButton("←")
         self.forward_btn = QPushButton("→")
         self.reload_btn = QPushButton("⟳")
-        self.go_btn = QPushButton("GO")
         self.scan_btn = QPushButton("SCAN HEADERS")
         self.link_scan_btn = QPushButton("SCAN LINKS")
         self.ai_analyze_btn = QPushButton("AI ANALYZE")
         self.blocking_btn = QPushButton("BLOCKING OFF")
         self.console_btn = QPushButton("CONSOLE")
-        self.dock_bottom_btn = QPushButton("BOTTOM")
-        self.dock_right_btn = QPushButton("RIGHT")
+        self.dock_bottom_btn = QPushButton("BOTTOM PANEL")
+        self.dock_right_btn = QPushButton("RIGHT SIDE")
 
         self.url_bar.setPlaceholderText("Enter URL...")
 
@@ -121,7 +170,6 @@ class MainWindow(QMainWindow):
         nav_bar.addWidget(self.forward_btn)
         nav_bar.addWidget(self.reload_btn)
         nav_bar.addWidget(self.url_bar)
-        nav_bar.addWidget(self.go_btn)
         nav_bar.addWidget(self.scan_btn)
         nav_bar.addWidget(self.link_scan_btn)
         nav_bar.addWidget(self.ai_analyze_btn)
@@ -161,16 +209,31 @@ class MainWindow(QMainWindow):
 
         summary_bar = QFrame()
         summary_bar.setObjectName("SecuritySummaryBar")
-        summary_bar.setFixedHeight(30)
+        summary_bar.setFixedHeight(62)
 
-        title_row = QHBoxLayout(summary_bar)
-        title_row.setContentsMargins(8, 0, 8, 0)
-        title_row.setSpacing(10)
+        summary_layout = QVBoxLayout(summary_bar)
+        summary_layout.setContentsMargins(8, 5, 8, 5)
+        summary_layout.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(0, 0, 0, 0)
+        stats_row.setSpacing(12)
 
         title = QLabel("SECURITY CONSOLE")
         title.setObjectName("PanelTitle")
+        position_label = QLabel("DOCK:")
+        position_label.setObjectName("ConsolePositionLabel")
         self.dock_bottom_btn.setObjectName("ConsoleToolButton")
         self.dock_right_btn.setObjectName("ConsoleToolButton")
+        self.dock_bottom_btn.setCheckable(True)
+        self.dock_right_btn.setCheckable(True)
+        self.dock_bottom_btn.setChecked(True)
+        self.dock_bottom_btn.setToolTip("Dock the security console below the browser.")
+        self.dock_right_btn.setToolTip("Dock the security console on the right side.")
     
         self.score_label.setObjectName("ScoreLabel")
         self.grade_label.setObjectName("GradeLabel")
@@ -178,13 +241,19 @@ class MainWindow(QMainWindow):
         self.allowed_label.setObjectName("AllowedLabel")
     
         title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(position_label)
         title_row.addWidget(self.dock_bottom_btn)
         title_row.addWidget(self.dock_right_btn)
-        title_row.addStretch()
-        title_row.addWidget(self.allowed_label)
-        title_row.addWidget(self.blocked_label)
-        title_row.addWidget(self.score_label)
-        title_row.addWidget(self.grade_label)
+
+        stats_row.addWidget(self.allowed_label)
+        stats_row.addWidget(self.blocked_label)
+        stats_row.addWidget(self.score_label)
+        stats_row.addWidget(self.grade_label)
+        stats_row.addStretch()
+
+        summary_layout.addLayout(title_row)
+        summary_layout.addLayout(stats_row)
 
         security_layout.addWidget(summary_bar)
     
@@ -219,26 +288,22 @@ class MainWindow(QMainWindow):
             ["Time", "Action", "Method", "Type", "Reason", "URL"]
         )
     
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeToContents
-        )
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeToContents
-        )
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeToContents
-        )
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeToContents
-        )
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            4, QHeaderView.ResizeToContents
-        )
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            5, QHeaderView.Stretch
-        )
+        header = self.network_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        for column in range(6):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+        self.network_table.setColumnWidth(0, 118)
+        self.network_table.setColumnWidth(1, 92)
+        self.network_table.setColumnWidth(2, 82)
+        self.network_table.setColumnWidth(3, 290)
+        self.network_table.setColumnWidth(4, 220)
+        self.network_table.setColumnWidth(5, 900)
     
         self.network_table.verticalHeader().setVisible(False)
+        self.network_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.network_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.network_table.setTextElideMode(Qt.ElideNone)
+        self.network_table.setWordWrap(False)
         self.network_table.setShowGrid(False)
         self.network_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.network_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -306,7 +371,6 @@ class MainWindow(QMainWindow):
         self.security_dock.hide()
 
     def _connect_signals(self):
-        self.go_btn.clicked.connect(self.go_to_url)
         self.scan_btn.clicked.connect(self.scan_current_url)
         self.link_scan_btn.clicked.connect(self.scan_page_links)
         self.ai_analyze_btn.clicked.connect(self.analyze_current_traffic)
@@ -331,17 +395,10 @@ class MainWindow(QMainWindow):
         self.network_table.cellDoubleClicked.connect(self.show_network_detail)
         self.link_scan_finished.connect(self.apply_link_scan_results)
         self.link_scan_failed.connect(self.on_link_scan_failed)
+        self.header_scan_finished.connect(self.apply_header_scan_result)
 
     def normalize_url(self, text: str) -> str:
-        text = text.strip()
-
-        if not text:
-            return "https://google.com"
-
-        if not text.startswith(("http://", "https://")):
-            text = "https://" + text
-
-        return text
+        return normalize_browser_input(text)
 
     def load_url(self, url: str):
         normalized = self.normalize_url(url)
@@ -363,6 +420,7 @@ class MainWindow(QMainWindow):
             self.security_output.setPlainText("[ERROR] Page failed to load.")
 
     def on_load_started(self):
+        self.reset_header_scan_state()
         self.reset_network_stats()
         self.reset_link_scan_state()
 
@@ -376,6 +434,11 @@ class MainWindow(QMainWindow):
         self.link_scan_btn.setText("SCAN LINKS")
         self.last_link_scan_results = []
         self.update_mitre_panel()
+
+    def reset_header_scan_state(self):
+        self.header_scan_id += 1
+        self.scan_btn.setEnabled(True)
+        self.scan_btn.setText("SCAN HEADERS")
 
     def reset_network_stats(self):
         self.traffic_session_id = self.new_traffic_session_id()
@@ -412,6 +475,8 @@ class MainWindow(QMainWindow):
 
     def move_console_bottom(self):
         self.security_dock.show()
+        self.dock_bottom_btn.setChecked(True)
+        self.dock_right_btn.setChecked(False)
 
         if self.security_dock.isFloating():
             self.security_dock.setFloating(False)
@@ -428,6 +493,8 @@ class MainWindow(QMainWindow):
 
     def move_console_right(self):
         self.security_dock.show()
+        self.dock_bottom_btn.setChecked(False)
+        self.dock_right_btn.setChecked(True)
 
         if self.security_dock.isFloating():
             self.security_dock.setFloating(False)
@@ -445,10 +512,40 @@ class MainWindow(QMainWindow):
     def scan_current_url(self, show_console: bool = True):
         url = self.url_bar.text().strip()
 
-        self.security_output.setPlainText("[*] Scanning security headers...\n")
+        if show_console:
+            self.security_output.setPlainText("[*] Scanning security headers...\n")
+            self.scan_btn.setEnabled(False)
+            self.scan_btn.setText("SCANNING...")
 
-        result = analyze_headers(url)
+        self.header_scan_id += 1
+        scan_id = self.header_scan_id
+        worker = Thread(
+            target=self.run_header_scan_worker,
+            args=(scan_id, url, show_console),
+            daemon=True,
+        )
+        worker.start()
 
+        if show_console:
+            self.security_dock.show()
+            self.security_dock.raise_()
+
+    def run_header_scan_worker(self, scan_id: int, url: str, show_console: bool):
+        timeout = 2.0 if not show_console else 5.0
+        result = analyze_headers(url, timeout=timeout)
+        self.header_scan_finished.emit(scan_id, result, show_console)
+
+    def apply_header_scan_result(self, scan_id: int, result: dict, show_console: bool):
+        if scan_id != self.header_scan_id:
+            return
+
+        if show_console:
+            self.scan_btn.setEnabled(True)
+            self.scan_btn.setText("SCAN HEADERS")
+
+        self.render_header_scan_result(result, show_console)
+
+    def render_header_scan_result(self, result: dict, show_console: bool):
         if not result["ok"]:
             self.score_label.setText("Score: N/A")
             self.grade_label.setText("Grade: N/A")

@@ -596,7 +596,7 @@ def grade_from_score(score: int) -> str:
     return "F"
 
 
-def analyze_headers(url: str) -> dict:
+def analyze_headers(url: str, timeout: float = 5.0) -> dict:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
@@ -607,7 +607,7 @@ def analyze_headers(url: str) -> dict:
     try:
         with httpx.Client(
             follow_redirects=True,
-            timeout=10.0,
+            timeout=timeout,
             headers={"User-Agent": "SecBrowser-MVP/0.1"},
         ) as client:
             response = client.get(url)
