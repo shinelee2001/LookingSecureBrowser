@@ -2,7 +2,9 @@
 
 Security-focused Python web browser prototype built with PySide6 and Qt WebEngine.
 
-![ShadowBrowser screenshot](docs/browser.png)
+![Browser screenshot1](docs/browser_sample_1.png)
+![Browser screenshot2](docs/browser_sample_2.png)
+
 
 ## Features
 
@@ -33,11 +35,11 @@ Without `scikit-learn`, ShadowBrowser falls back to a lightweight local baseline
 
 ## Local Traffic AI Engine
 
-The `AI ANALYZE` button runs analysis on the current page session. Request metadata is stored locally in `data/traffic_ai.sqlite` with a short retention policy and an event cap. The store keeps hashes, domains, paths, and extracted features instead of raw request bodies, cookies, or authorization headers.
+The `AI ANALYZE` button runs analysis on the current page session. Request metadata is stored locally in `data/traffic_ai.sqlite` with a short retention policy, an event cap, and a 5 MB database size cap. The store keeps hashes, domains, paths, and extracted features instead of raw request bodies, cookies, or authorization headers.
 
 Current engine layers:
 
-- SQLite event store with retention cleanup
+- SQLite event store with retention cleanup, event-count pruning, file-size pruning, and compaction
 - Feature extraction for URL length, entropy, query counts, third-party status, tracker hints, and HTTP usage
 - Rule signals for insecure third-party requests, sensitive query names, suspicious URL keywords, and bursts
 - `scikit-learn` IsolationForest anomaly detection with StandardScaler normalization, model anomaly scores, and top contributing feature hints
